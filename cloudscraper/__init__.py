@@ -1,7 +1,7 @@
-import re
-import ssl
-import brotli
 import logging
+import re
+import sys
+import ssl
 
 from copy import deepcopy
 from time import sleep
@@ -20,6 +20,11 @@ except ImportError:
     pass
 
 try:
+    import brotli
+except ImportError:
+    pass
+
+try:
     from urlparse import urlparse
     from urlparse import urlunparse
 except ImportError:
@@ -28,30 +33,39 @@ except ImportError:
 
 ##########################################################################################################################################################
 
-__version__ = '1.1.1'
+__version__ = '1.1.11'
 
 BUG_REPORT = 'Cloudflare may have changed their technique, or there may be a bug in the script.'
 
 ##########################################################################################################################################################
 
 
-class cipherSuiteAdapter(HTTPAdapter):
+class CipherSuiteAdapter(HTTPAdapter):
 
     def __init__(self, cipherSuite=None, **kwargs):
         self.cipherSuite = cipherSuite
-        super(cipherSuiteAdapter, self).__init__(**kwargs)
+
+        if hasattr(ssl, 'PROTOCOL_TLS'):
+            self.ssl_context = create_urllib3_context(
+                ssl_version=getattr(ssl, 'PROTOCOL_TLSv1_3', ssl.PROTOCOL_TLSv1_2),
+                ciphers=self.cipherSuite
+            )
+        else:
+            self.ssl_context = create_urllib3_context(ssl_version=ssl.PROTOCOL_TLSv1)
+
+        super(CipherSuiteAdapter, self).__init__(**kwargs)
 
     ##########################################################################################################################################################
 
     def init_poolmanager(self, *args, **kwargs):
-        kwargs['ssl_context'] = create_urllib3_context(ciphers=self.cipherSuite)
-        return super(cipherSuiteAdapter, self).init_poolmanager(*args, **kwargs)
+        kwargs['ssl_context'] = self.ssl_context
+        return super(CipherSuiteAdapter, self).init_poolmanager(*args, **kwargs)
 
     ##########################################################################################################################################################
 
     def proxy_manager_for(self, *args, **kwargs):
-        kwargs['ssl_context'] = create_urllib3_context(ciphers=self.cipherSuite)
-        return super(cipherSuiteAdapter, self).proxy_manager_for(*args, **kwargs)
+        kwargs['ssl_context'] = self.ssl_context
+        return super(CipherSuiteAdapter, self).proxy_manager_for(*args, **kwargs)
 
 ##########################################################################################################################################################
 
@@ -61,7 +75,7 @@ class CloudScraper(Session):
         self.debug = kwargs.pop('debug', False)
         self.delay = kwargs.pop('delay', None)
         self.interpreter = kwargs.pop('interpreter', 'js2py')
-        self.allow_brotli = kwargs.pop('allow_brotli', True)
+        self.allow_brotli = kwargs.pop('allow_brotli', True if 'brotli' in sys.modules.keys() else False)
         self.cipherSuite = None
 
         super(CloudScraper, self).__init__(*args, **kwargs)
@@ -69,6 +83,8 @@ class CloudScraper(Session):
         if 'requests' in self.headers['User-Agent']:
             # Set a random User-Agent if no custom User-Agent has been set
             self.headers = User_Agent(allow_brotli=self.allow_brotli).headers
+
+        self.mount('https://', CipherSuiteAdapter(self.loadCipherSuite()))
 
     ##########################################################################################################################################################
 
@@ -85,25 +101,27 @@ class CloudScraper(Session):
         if self.cipherSuite:
             return self.cipherSuite
 
-        ciphers = [
-            'GREASE_3A', 'GREASE_6A', 'AES128-GCM-SHA256', 'AES256-GCM-SHA256', 'AES256-GCM-SHA384', 'CHACHA20-POLY1305-SHA256',
-            'ECDHE-ECDSA-AES128-GCM-SHA256', 'ECDHE-RSA-AES128-GCM-SHA256', 'ECDHE-ECDSA-AES256-GCM-SHA384',
-            'ECDHE-RSA-AES256-GCM-SHA384', 'ECDHE-ECDSA-CHACHA20-POLY1305-SHA256', 'ECDHE-RSA-CHACHA20-POLY1305-SHA256',
-            'ECDHE-RSA-AES128-CBC-SHA', 'ECDHE-RSA-AES256-CBC-SHA', 'RSA-AES128-GCM-SHA256', 'RSA-AES256-GCM-SHA384',
-            'ECDHE-RSA-AES128-GCM-SHA256', 'RSA-AES256-SHA', '3DES-EDE-CBC'
-        ]
-
         self.cipherSuite = ''
 
-        ctx = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
-        ctx.set_ciphers('ALL')
+        if hasattr(ssl, 'PROTOCOL_TLS'):
+            ciphers = [
+                'ECDHE-ECDSA-AES128-GCM-SHA256', 'ECDHE-RSA-AES128-GCM-SHA256', 'ECDHE-ECDSA-AES256-GCM-SHA384',
+                'ECDHE-RSA-AES256-GCM-SHA384', 'ECDHE-ECDSA-CHACHA20-POLY1305-SHA256', 'ECDHE-RSA-CHACHA20-POLY1305-SHA256',
+                'ECDHE-RSA-AES128-CBC-SHA', 'ECDHE-RSA-AES256-CBC-SHA', 'RSA-AES128-GCM-SHA256', 'RSA-AES256-GCM-SHA384',
+                'ECDHE-RSA-AES128-GCM-SHA256', 'RSA-AES256-SHA', '3DES-EDE-CBC'
+            ]
 
-        for cipher in ciphers:
-            try:
-                ctx.set_ciphers(cipher)
-                self.cipherSuite = '{}:{}'.format(self.cipherSuite, cipher).rstrip(':')
-            except ssl.SSLError:
-                pass
+            if hasattr(ssl, 'PROTOCOL_TLSv1_3'):
+                ciphers.insert(0, ['GREASE_3A', 'GREASE_6A', 'AES128-GCM-SHA256', 'AES256-GCM-SHA256', 'AES256-GCM-SHA384', 'CHACHA20-POLY1305-SHA256'])
+
+            ctx = ssl.SSLContext(getattr(ssl, 'PROTOCOL_TLSv1_3', ssl.PROTOCOL_TLSv1_2))
+
+            for cipher in ciphers:
+                try:
+                    ctx.set_ciphers(cipher)
+                    self.cipherSuite = '{}:{}'.format(self.cipherSuite, cipher).rstrip(':')
+                except ssl.SSLError:
+                    pass
 
         return self.cipherSuite
 
@@ -111,7 +129,6 @@ class CloudScraper(Session):
 
     def request(self, method, url, *args, **kwargs):
         ourSuper = super(CloudScraper, self)
-        ourSuper.mount('https://', cipherSuiteAdapter(self.loadCipherSuite()))
         resp = ourSuper.request(method, url, *args, **kwargs)
 
         if resp.headers.get('Content-Encoding') == 'br':

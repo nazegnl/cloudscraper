@@ -33,6 +33,7 @@ setup(
     ],
     include_package_data = True,
     install_requires = [
+        'pyopenssl >= 17.0',
         'requests >= 2.9.2',
         'js2py >= 0.60',
         'requests_toolbelt >= 0.9.1',
@@ -51,6 +52,9 @@ setup(
         'Programming Language :: Python :: 3.4',
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7'
+        'Programming Language :: Python :: 3.7',
+        'Topic :: Internet :: WWW/HTTP',
+        'Topic :: Software Development :: Libraries :: Application Frameworks',
+        'Topic :: Software Development :: Libraries :: Python Modules'
     ]
 )
